@@ -489,7 +489,12 @@ select.fc{appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,
   .btn-finance-nav{padding:7px 10px}
   .logo-img{height:42px}
 }
-.mclose { display: none !important; }
+/* Restore the modal X close button — it was hidden site-wide which made
+   modals hard to dismiss on mobile (no escape key on phones). */
+.mclose{display:inline-flex!important;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:50%;background:#f0f1f4;border:none;
+  color:#666;cursor:pointer;transition:background .15s,color .15s;flex-shrink:0}
+.mclose:hover{background:#e5e7eb;color:#1a1a1f}
 </style>
 </head>
 <body>
@@ -497,8 +502,73 @@ select.fc{appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback}=React;
+
+/* ── SUPABASE CLIENT ──────────────────────────────────────────────────────
+   Listings, owner auth, and photo storage all live in Supabase now.
+   The publishable key is safe to expose — RLS policies on the server
+   gate writes to authenticated users only. Anon visitors get read-only. */
+const SUPABASE_URL="https://ymktkaegsgolyerwzkhw.supabase.co";
+const SUPABASE_KEY="sb_publishable_GKN2SL5SZfLNR4MxUVQbvw_3fdw11T5";
+if(!window.supabase||!window.supabase.createClient){
+  console.error("Supabase library failed to load. Check network / CDN.");
+  alert("Couldn't load required library — check your internet connection and refresh.");
+}
+const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
+  auth:{persistSession:true,autoRefreshToken:true},
+  global:{headers:{apikey:SUPABASE_KEY}}
+});
+const BUCKET="rv-images";
+
+/* Upload any data: URL photos to Supabase Storage and return public URLs.
+   Existing http(s) URLs pass through untouched. */
+async function uploadPhotos(photos,listingId){
+  const out=[];
+  for(let i=0;i<photos.length;i++){
+    const p=photos[i];
+    if(!p){continue;}
+    if(typeof p==="string"&&!p.startsWith("data:")){out.push(p);continue;}
+    /* data URL → upload */
+    try{
+      const resp=await fetch(p);
+      const blob=await resp.blob();
+      const ext=(blob.type.split("/")[1]||"jpg").replace("jpeg","jpg");
+      const path=`${listingId}/${Date.now()}-${i}.${ext}`;
+      const {error}=await sb.storage.from(BUCKET).upload(path,blob,{contentType:blob.type,upsert:false});
+      if(error){console.error("Upload failed",error);out.push(p);continue;}
+      const {data:pub}=sb.storage.from(BUCKET).getPublicUrl(path);
+      out.push(pub.publicUrl);
+    }catch(e){console.error("Photo upload error",e);out.push(p);}
+  }
+  return out;
+}
+
+/* CRUD wrappers — keep listings table in sync. All return updated row(s) or throw. */
+async function fetchListings(){
+  const {data,error}=await sb.from("listings").select("*").order("created_at",{ascending:false});
+  if(error)throw error;
+  return data||[];
+}
+async function insertListing(car){
+  const photos=await uploadPhotos(car.photos||[],car.id);
+  const row={...car,photos};
+  const {data,error}=await sb.from("listings").insert(row).select().single();
+  if(error)throw error;
+  return data;
+}
+async function updateListing(car){
+  const photos=await uploadPhotos(car.photos||[],car.id);
+  const row={...car,photos};
+  const {data,error}=await sb.from("listings").update(row).eq("id",car.id).select().single();
+  if(error)throw error;
+  return data;
+}
+async function deleteListing(id){
+  const {error}=await sb.from("listings").delete().eq("id",id);
+  if(error)throw error;
+}
 
 /* images.weserv.nl — correct production proxy domain */
 const WP="https://upstatervcenter.com/wp/wp-content/uploads";
@@ -1006,21 +1076,32 @@ function GalleryModal({car,onClose,onInquire}){
          with server-side auth — never trust the browser to gate edits.
    As written, anyone reading the source can sign in and the inventory state
    only persists in memory (refresh wipes it). */
+/* SIGN IN — Supabase Auth (email + password). Replaces hardcoded creds.
+   Jeremy's account is created in Supabase Dashboard → Authentication → Users.
+   RLS policies on the listings table only allow inserts/updates/deletes
+   from authenticated sessions, so signed-out visitors get read-only access. */
 function SignInModal({onClose,onSuccess}){
-  const [u,setU]=useState("");const [p,setP]=useState("");const [err,setErr]=useState("");
+  const [email,setEmail]=useState("");const [pw,setPw]=useState("");
+  const [err,setErr]=useState("");const [busy,setBusy]=useState(false);
   useLock(true);
-  /* TODO: replace with real auth before production */
-  const go=()=>(u==="furgie1203"&&p==="Regal1203!")?onSuccess():setErr("Incorrect credentials.");
+  const go=async()=>{
+    if(!email||!pw){setErr("Email and password required.");return;}
+    setBusy(true);setErr("");
+    const {error}=await sb.auth.signInWithPassword({email,password:pw});
+    setBusy(false);
+    if(error){setErr(error.message||"Sign in failed.");return;}
+    onSuccess();
+  };
   return(
     <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
         <div className="mhead"><h3>Sign In</h3><button className="mclose" onClick={onClose} aria-label="Close"><Icon n="x" c="" style={{width:14,height:14,stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}/></button></div>
         <div className="mbody">
           {err&&<div className="err-box">{err}</div>}
-          <div className="fgi"><label>Username</label><input className="fi" value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Username" autoFocus/></div>
-          <div className="fgi"><label>Password</label><input className="fi" type="password" value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Password"/></div>
+          <div className="fgi"><label>Email</label><input className="fi" type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="you@example.com" autoFocus disabled={busy}/></div>
+          <div className="fgi"><label>Password</label><input className="fi" type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Password" disabled={busy}/></div>
         </div>
-        <div className="mfoot"><button className="btn-can" onClick={onClose}>Cancel</button><button className="btn-save" onClick={go}>Sign In</button></div>
+        <div className="mfoot"><button className="btn-can" onClick={onClose} disabled={busy}>Cancel</button><button className="btn-save" onClick={go} disabled={busy}>{busy?"Signing in…":"Sign In"}</button></div>
       </div>
     </div>
   );
@@ -1325,17 +1406,11 @@ function ServiceForm(){
 }
 
 /* ── MAIN APP ── */
-const LISTINGS_KEY="upstaterv_listings_v1";
-function loadListings(){
-  try{
-    const raw=localStorage.getItem(LISTINGS_KEY);
-    if(raw===null)return INIT;
-    const saved=JSON.parse(raw);
-    return Array.isArray(saved)?saved:INIT;
-  }catch(e){return INIT;}
-}
 function App(){
-  const [listings,setListings]=useState(loadListings);
+  /* Listings start empty and hydrate from Supabase on mount.
+     Owner state mirrors Supabase auth — restored on page reload. */
+  const [listings,setListings]=useState([]);
+  const [loading,setLoading]=useState(true);
   const [isOwner,setIsOwner]=useState(false);
   const [editMode,setEditMode]=useState(false);
   const [showSold,setShowSold]=useState(false);
@@ -1343,9 +1418,38 @@ function App(){
   const [search,setSearch]=useState("");
   const [filterType,setFilterType]=useState("All");
   const [toast,setToast]=useState(null);
+
+  /* Initial load: fetch listings + check existing auth session */
   useEffect(()=>{
-    try{localStorage.setItem(LISTINGS_KEY,JSON.stringify(listings));}catch(e){}
-  },[listings]);
+    let mounted=true;
+    (async()=>{
+      try{
+        const rows=await fetchListings();
+        if(mounted)setListings(rows);
+      }catch(e){
+        /* Surface the real error message — Supabase errors are objects with
+           {message, code, details, hint}, and JSON.stringify makes them
+           visible to humans instead of "[object Object]". */
+        const detail=e?.message||e?.error_description||JSON.stringify(e);
+        console.error("Failed to load listings:",detail,e);
+        if(mounted){
+          setListings([]);
+          showToast("Couldn't load inventory: "+detail,"e");
+        }
+      }finally{
+        if(mounted)setLoading(false);
+      }
+      try{
+        const {data:{session}}=await sb.auth.getSession();
+        if(mounted&&session)setIsOwner(true);
+      }catch(e){console.error("Auth session check failed:",e);}
+    })();
+    /* Listen for auth changes (sign in / sign out from anywhere) */
+    const {data:sub}=sb.auth.onAuthStateChange((_evt,session)=>{
+      if(mounted)setIsOwner(!!session);
+    });
+    return()=>{mounted=false;sub?.subscription?.unsubscribe?.();};
+  },[]);
   const invRef=useRef(null);
 
   const showToast=(msg,type="d")=>setToast({msg,type,key:Date.now()});
@@ -1401,7 +1505,7 @@ function App(){
           }
         }} aria-label={editMode?"Exit edit mode":"Enter edit mode"} title={editMode?"Exit edit mode":"Edit site content"}><svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>{editMode?"Exit Edit":"Edit Mode"}</button>}
         {isOwner
-          ?<button className="btn-so" onClick={()=>{if(window.signOut&&document.body.classList.contains("owner"))window.signOut();setIsOwner(false);setEditMode(false);setShowSold(false);showToast("Signed out","i")}}>Sign Out</button>
+          ?<button className="btn-so" onClick={async()=>{await sb.auth.signOut();if(window.signOut&&document.body.classList.contains("owner"))window.signOut();setIsOwner(false);setEditMode(false);setShowSold(false);showToast("Signed out","i")}}>Sign Out</button>
           :<button className="btn-si" onClick={()=>setModal({type:"signIn"})}>Sign In</button>}
       </div>
     </nav>
@@ -1703,9 +1807,30 @@ function App(){
     {modal?.type==="signIn"  &&<SignInModal   onClose={()=>setModal(null)} onSuccess={()=>{setIsOwner(true);setModal(null);showToast("Welcome back, Jeremy","i")}}/>}
     {modal?.type==="gallery" &&<GalleryModal  car={modal.car} onClose={()=>setModal(null)} onInquire={()=>setModal({type:"inquiry",car:modal.car})}/>}
     {modal?.type==="inquiry" &&<InquiryModal  car={modal.car} onClose={()=>setModal(null)}/>}
-    {modal?.type==="add"     &&<ListingModal  onClose={()=>setModal(null)} onSave={car=>{setListings(l=>[car,...l]);setModal(null);showToast("Listing added","s")}}/>}
-    {modal?.type==="edit"    &&<ListingModal  car={modal.car} onClose={()=>setModal(null)} onSave={u=>{setListings(l=>l.map(r=>r.id===u.id?u:r));setModal(null);showToast("Listing updated","s")}}/>}
-    {modal?.type==="delete"  &&<DeleteModal   car={modal.car} onClose={()=>setModal(null)} onConfirm={()=>{setListings(l=>l.filter(r=>r.id!==modal.car.id));setModal(null);showToast("Listing removed","i")}}/>}
+    {modal?.type==="add"     &&<ListingModal  onClose={()=>setModal(null)} onSave={async car=>{
+      try{
+        const saved=await insertListing(car);
+        setListings(l=>[saved,...l]);
+        setModal(null);
+        showToast("Listing added","s");
+      }catch(e){console.error(e);showToast("Save failed: "+(e.message||"unknown error"),"e");}
+    }}/>}
+    {modal?.type==="edit"    &&<ListingModal  car={modal.car} onClose={()=>setModal(null)} onSave={async u=>{
+      try{
+        const saved=await updateListing(u);
+        setListings(l=>l.map(r=>r.id===saved.id?saved:r));
+        setModal(null);
+        showToast("Listing updated","s");
+      }catch(e){console.error(e);showToast("Update failed: "+(e.message||"unknown error"),"e");}
+    }}/>}
+    {modal?.type==="delete"  &&<DeleteModal   car={modal.car} onClose={()=>setModal(null)} onConfirm={async()=>{
+      try{
+        await deleteListing(modal.car.id);
+        setListings(l=>l.filter(r=>r.id!==modal.car.id));
+        setModal(null);
+        showToast("Listing removed","i");
+      }catch(e){console.error(e);showToast("Delete failed: "+(e.message||"unknown error"),"e");}
+    }}/>}
   </>);
 }
 
@@ -6189,6 +6314,35 @@ body.owner.has-toolbar{padding-top:0!important}
 /* Make sure the dealership nav still wins z-index over the editor bars
    so its dropdowns and clicks aren't blocked. */
 nav{z-index:10000!important}
+
+/* ─────── HARD-LOCK editor UI for non-owners (mobile fix) ───────
+   The editor skill has its own floating Sign In button + modal that should
+   never be visible to regular visitors. Triple-redundant hiding to stop
+   the editor's surface from leaking through on mobile, where stray taps
+   were sometimes activating it. The hint text "Demo access: owner / sitepass123"
+   on that modal would also confuse visitors — locking it out entirely. */
+#editorSignInBtn{
+  display:none!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+  opacity:0!important;
+}
+body:not(.owner) #signInOverlay,
+body:not(.owner) #ownerBar,
+body:not(.owner) #elementToolbar,
+body:not(.owner) #themeOverlay,
+body:not(.owner) #navOverlay,
+body:not(.owner) #listingOverlay,
+body:not(.owner) #deleteOverlay,
+body:not(.owner) #bgOverlay,
+body:not(.owner) #blockPickerOverlay,
+body:not(.owner) #imgPickerOverlay{
+  display:none!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+  opacity:0!important;
+}
+
 /* Smoother, jump-free entry into Edit Mode.
    - Owner bar: short opacity fade instead of slide-down; eliminates the
      drawn-out 0.35s slide and the brief moment where it's mid-transit.
