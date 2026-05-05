@@ -201,6 +201,16 @@ section{padding:68px 2rem}
 
 /* CARDS */
 .inv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:1.4rem}
+
+/* SKELETON LOADER — shown while listings are being fetched from Supabase. */
+@keyframes skel-pulse{0%,100%{opacity:.55}50%{opacity:.95}}
+.rv-skel{background:#fff;border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);animation:skel-pulse 1.4s ease-in-out infinite}
+.rv-skel-img{width:100%;height:200px;background:linear-gradient(110deg,#eef0f3 8%,#f7f8fa 18%,#eef0f3 33%);background-size:200% 100%;animation:skel-shimmer 1.6s linear infinite}
+.rv-skel-body{padding:1rem 1.1rem 1.2rem;display:flex;flex-direction:column;gap:.55rem}
+.rv-skel-line{height:14px;border-radius:4px;background:linear-gradient(110deg,#eef0f3 8%,#f7f8fa 18%,#eef0f3 33%);background-size:200% 100%;animation:skel-shimmer 1.6s linear infinite}
+.rv-skel-line-w{height:18px;width:80%}
+.rv-skel-line-s{width:50%}
+@keyframes skel-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .rv-card{background:#fff;border-radius:var(--r);border:1px solid var(--border);overflow:hidden;box-shadow:var(--sh-sm);transition:transform .25s,box-shadow .25s,border-color .2s;position:relative;display:flex;flex-direction:column;cursor:pointer}
 .rv-card:hover{transform:translateY(-4px);box-shadow:var(--sh-lg);border-color:rgba(58,123,184,.28)}
 .rv-card:focus-visible{outline:2px solid var(--forest);outline-offset:2px}
@@ -339,7 +349,20 @@ footer{background:#06122a;padding:0;color:rgba(255,255,255,.55);font-size:.82rem
 .modal{background:#fff;border-radius:var(--r);width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:var(--sh-lg);animation:sUp .25s ease}
 .modal-wide{max-width:590px}
 .modal-gal{max-width:96vw;max-height:96vh}
+/* SPECIFICITY GUARD — the sign-in editor skill defines its own `.modal` rule
+   later in the stylesheet (around line ~2139) that clobbers width / padding /
+   transform / background on every React modal we render. These compound-class
+   selectors (specificity 0,2,0) beat its bare `.modal` selector (0,1,0) so our
+   listings UI doesn't inherit the editor's services-modal styling. */
+.overlay .modal{padding:0;background:#fff;border-radius:var(--r);box-shadow:var(--sh-lg);transform:none;max-width:480px}
+.overlay .modal.modal-wide{max-width:590px}
+.overlay .modal.modal-gal{max-width:96vw;max-height:96vh}
 .mhead{padding:1.4rem 1.4rem 0;display:flex;justify-content:space-between;align-items:center}
+/* On the gallery modal, the header is sticky so the X close button stays
+   reachable while scrolling through tall photos / thumbnails / description. */
+.modal-gal .mhead{position:sticky;top:0;z-index:5;background:#fff;padding-bottom:1rem;border-bottom:1px solid var(--border)}
+.modal-gal .mclose{width:38px;height:38px;background:#fff;border:1px solid var(--border);box-shadow:var(--sh-sm)}
+.modal-gal .mclose:hover{background:var(--cream);border-color:var(--forest);color:var(--forest)}
 .mhead h3{font-family:'Playfair Display',serif;font-size:1.3rem;color:var(--slate)}
 .mclose{width:30px;height:30px;border:none;background:var(--cream);border-radius:50%;cursor:pointer;font-size:.9rem;color:var(--muted);display:flex;align-items:center;justify-content:center;transition:background .2s;flex-shrink:0}
 .mclose:hover{background:var(--border)}
@@ -435,7 +458,7 @@ select.fc{appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,
 .cb-empty{padding:.6rem .7rem;color:var(--muted);font-size:.82rem;font-style:italic}
 
 /* GALLERY */
-.gal-main{width:100%;height:70vh;object-fit:contain;background:#0a0a0a;border-radius:var(--rs);margin-bottom:.8rem}
+.gal-main{display:block;width:auto;max-width:100%;height:auto;max-height:78vh;object-fit:contain;border-radius:var(--rs);margin:0 auto .8rem}
 .gal-thumbs{display:flex;gap:.4rem;flex-wrap:wrap;max-height:160px;overflow-y:auto;padding-bottom:.2rem}
 .gal-thumb{width:76px;height:52px;object-fit:cover;border-radius:5px;cursor:pointer;border:2px solid transparent;transition:border-color .15s;flex-shrink:0}
 .gal-thumb.active{border-color:var(--forest)}
@@ -495,7 +518,7 @@ select.fc{appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,
   .service-grid{grid-template-columns:1fr}
   .cats-grid{grid-template-columns:repeat(2,1fr);max-width:560px}
   .nav-links{display:none}
-  .gal-main{height:55vh}
+  .gal-main{max-height:60vh}
 }
 @media(max-width:700px){
   .cats-grid{grid-template-columns:repeat(2,1fr)}
@@ -508,7 +531,7 @@ select.fc{appearance:none;background:#fff url("data:image/svg+xml;charset=UTF-8,
   .nav-phone{display:none}
   .btn-finance-nav{padding:7px 12px;font-size:.78rem}
   .btn-finance-nav .fin-txt{display:none}
-  .gal-main{height:45vh}
+  .gal-main{max-height:50vh}
 }
 @media(max-width:500px){
   nav{padding:0 1rem;gap:.7rem}
@@ -1117,14 +1140,14 @@ function GalleryModal({car,onClose,onInquire}){
   return(
     <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal modal-gal">
-        <div className="mhead" style={{flexDirection:"column",alignItems:"flex-start",gap:".15rem",paddingRight:"3.5rem",position:"relative"}}>
+        <div className="mhead" style={{flexDirection:"column",alignItems:"flex-start",gap:".15rem",paddingRight:"3.5rem"}}>
           <h3 style={{marginBottom:0}}>{Number(car.year)} {car.make} {car.model}</h3>
           <div style={{display:"flex",alignItems:"baseline",gap:".7rem",flexWrap:"wrap"}}>
             <span style={{fontFamily:"'Playfair Display',serif",fontSize:"1.35rem",color:"var(--forest)",fontWeight:700}}>{fmtP(car.price)}</span>
             {car.trim&&<span style={{fontSize:".82rem",color:"var(--muted)"}}>{car.trim}</span>}
             {!car.available&&<span style={{background:"var(--muted)",color:"#fff",padding:"2px 8px",borderRadius:5,fontSize:".65rem",fontWeight:700,letterSpacing:".05em"}}>SOLD</span>}
           </div>
-          <button className="mclose" onClick={onClose} aria-label="Close" style={{position:"absolute",top:"1.4rem",right:"1.4rem"}}><Icon n="x" c="" style={{width:14,height:14,...stroke}}/></button>
+          <button className="mclose" onClick={onClose} aria-label="Close" style={{position:"absolute",top:"3.25rem",right:"1.4rem"}}><Icon n="x" c="" style={{width:14,height:14,...stroke}}/></button>
         </div>
         <div className="mbody">
           {hasPhotos?(
@@ -1716,7 +1739,7 @@ function App(){
             <a href="#contact" className="btn-outline">Get In Touch</a>
           </div>
           <div className="hero-stats">
-            <div className="h-stat"><strong>{avail}</strong><span>Available Now</span></div>
+            <div className="h-stat"><strong>{loading?"—":avail}</strong><span>Available Now</span></div>
             <div className="h-stat"><strong>20+</strong><span>Years in Business</span></div>
             <div className="h-stat"><strong>100%</strong><span>Pre-Sale Inspected</span></div>
           </div>
@@ -1760,7 +1783,7 @@ function App(){
         <div className="sec-head">
           <div className="sec-tag">Inventory</div>
           <h2>Available RVs</h2>
-          <p>All {avail} units personally inspected before listing. Every photo is the actual vehicle — no stock images.</p>
+          <p>{loading?"Loading inventory…":`All ${avail} units personally inspected before listing. Every photo is the actual vehicle — no stock images.`}</p>
         </div>
 
         {isOwner&&(
@@ -1782,11 +1805,15 @@ function App(){
           <select className="fsel" value={filterType} onChange={e=>setFilterType(e.target.value)}>
             {allTypes.map(t=><option key={t}>{t}</option>)}
           </select>
-          <span className="rcnt">{shown.length} result{shown.length!==1?"s":""}</span>
+          <span className="rcnt">{loading?"Loading…":`${shown.length} result${shown.length!==1?"s":""}`}</span>
           {(search||filterType!=="All")&&<button className="clr-btn" onClick={()=>{setSearch("");setFilterType("All")}}>Clear</button>}
         </div>
 
-        {shown.length===0
+        {loading
+          ?<div className="inv-grid" aria-label="Loading inventory">
+            {[0,1,2,3,4,5].map(i=><div key={i} className="rv-skel"><div className="rv-skel-img"/><div className="rv-skel-body"><div className="rv-skel-line rv-skel-line-w"/><div className="rv-skel-line"/><div className="rv-skel-line rv-skel-line-s"/></div></div>)}
+          </div>
+          :shown.length===0
           ?<div className="empty"><div className="empty-ic"><Icon n="search" c="" style={{width:36,height:36,opacity:.4}}/></div><p>No RVs match your search. Try different filters.</p></div>
           :<div className="inv-grid">
             {shown.map(car=>{
